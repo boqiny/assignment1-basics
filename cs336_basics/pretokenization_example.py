@@ -1,6 +1,8 @@
 import os
 from typing import BinaryIO
-
+import multiprocessing
+import regex as re
+from collections import defaultdict, Counter
 
 def find_chunk_boundaries(
     file: BinaryIO,
@@ -48,15 +50,33 @@ def find_chunk_boundaries(
     # Make sure all boundaries are unique, but might be fewer than desired_num_chunks
     return sorted(set(chunk_boundaries))
 
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+FILE_LOCATION = "../data/TinyStoriesV2-GPT4-valid.txt"
 
-## Usage
-with open(..., "rb") as f:
-    num_processes = 4
-    boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+def pre_tokenize(bound: tuple[int, int]) -> dict[str, int]:
+        # desired output example: {low: 5, lower: 2, widest: 3, newest: 6}
+        start, end = bound[0], bound[1]
+        counts = defaultdict(int)
+        with open(FILE_LOCATION, "rb") as f:
+            f.seek(start)
+            chunk = f.read(end - start).decode("utf-8", errors="ignore")
+            splits = re.split(re.escape('<|endoftext|>'), chunk)
+            for split in splits:
+                matches = re.finditer(PAT, split)
+                for match in matches:
+                    counts[match.group()] += 1
+        return counts
 
-    # The following is a serial implementation, but you can parallelize this
-    # by sending each start/end pair to a set of processes.
-    for start, end in zip(boundaries[:-1], boundaries[1:]):
-        f.seek(start)
-        chunk = f.read(end - start).decode("utf-8", errors="ignore")
-        # Run pre-tokenization on your chunk and store the counts for each pre-token
+if __name__ == "__main__":
+    with open(FILE_LOCATION, "rb") as f:
+        num_processes = 4
+        boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+        p = multiprocessing.Pool(processes=num_processes)
+        boundaries_list = list(zip(boundaries[:-1], boundaries[1:]))
+        result = p.map(pre_tokenize, boundaries_list)
+        pretokenization_counter = Counter()
+        for r in result:
+            pretokenization_counter.update(r)
+        print(str(pretokenization_counter))
+        
+    
