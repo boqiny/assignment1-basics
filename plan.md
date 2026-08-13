@@ -1,6 +1,6 @@
 # CS336 Assignment 1 · 进度追踪
 
-最后更新：2026-08-11
+最后更新：2026-08-11（Day 1 收工）
 
 ---
 
@@ -29,12 +29,19 @@
 
 ### §2.4 BPE 训练 🔜 进行中
 
-- [ ] 合并循环（朴素版）
-- [ ] special tokens 加入 vocab
-- [ ] `num_merges` 计算修正为 `vocab_size - 256 - len(special_tokens)`
-- [ ] 返回值对齐 spec：`vocab: dict[int, bytes]`、`merges: list[tuple[bytes, bytes]]`
+- [x] `num_merges` 修正为 `vocab_size - 256 - len(special_tokens)`
+- [x] 合并循环（朴素版）
+- [x] tie-break：`max(pair_counts, key=lambda x: (pair_counts[x], x))`
+- [x] `merge()` 重建 dict
+- [x] 每轮重新统计 pair_counts
+- [x] `return vocab, merges`
+- [ ] **修返回值标注：`tuple(...)` 写成了圆括号，应为 `tuple[...]`**（见下方 Day 2 第 0 步）
+- [ ] special tokens 加入 vocab + ID 连续化
 - [ ] 填 `tests/adapters.py` 的 `run_train_bpe`
-- [ ] 增量更新优化
+- [ ] 跑通 `test_train_bpe` / `test_train_bpe_special_tokens`
+- [ ] 增量更新优化（过 `test_train_bpe_speed`）
+
+**验证：** toy 语料上 12 个 merge 与讲义完全一致 ✅
 
 ### §2.6 Tokenizer 类 ⬜ 未开始
 
@@ -102,26 +109,72 @@ s t, e st, o w, l ow, w est, n e, ne west, w i, wi d, wid est, low e, lowe r
 
 ## 每日计划
 
-### Day 1（今天）· 合并循环 → 测试全绿
+### Day 1 ✅ 完成 · 合并循环跑通
 
-1. 写朴素合并循环（每轮重新扫一遍统计 pair，不做优化）
-2. special tokens 加入 vocab，`num_merges` 改对
-3. 返回值改成 spec 要求的形式
-4. 填 `tests/adapters.py` 的 `run_train_bpe`
+朴素合并循环写完，toy 上 12 个 merge 与讲义完全一致。
 
-**验收：**
-- toy 上 12 个 merge 与上面基准完全一致
-- `uv run pytest tests/test_train_bpe.py` 全绿（含 `test_train_bpe_special_tokens`）
+---
 
-### Day 2 · 优化 + TinyStories + 启动 OWT
+### Day 2（明天）· 测试全绿 → 优化 → TinyStories
 
-1. 改增量更新：只更新受影响的 pair 计数。**改之前确认朴素版全绿**，这样出错能立刻对比
-2. `cProfile` / `py-spy` 找瓶颈
-3. 跑 TinyStories 10K 词表，序列化 vocab / merges 落盘
-4. 回答 `train_bpe_tinystories`：耗时、内存、最长 token 是什么、瓶颈在哪
-5. **做完立刻后台启动 OWT 32K 训练**（上限 12 小时），挂着去看 lecture
+**第 0 步（1 分钟）：修返回值标注**
 
-**验收：** 两个 test 全绿且优化前后结果一致；TinyStories 词表落盘
+```python
+def train_bpe(...) -> tuple(dict[int, bytes], list[...]):
+                      ^^^^^ 圆括号 → 应为方括号 tuple[...]
+```
+
+`tuple(...)` 是在**调用** tuple 构造函数，会在函数定义时就抛 `TypeError`，import 都进不去。改成方括号。
+
+**第 1 步：special tokens 进 vocab + ID 连续化**
+
+`test_train_bpe` 断言 `set(vocab.keys()) == set(reference_vocab.keys())`，
+vocab_size=500 就必须是恰好 500 个连续 key（0~499），不能有空洞。
+
+现在 `{0..255}` + 243 次 merge 的 `256+i` = 499 个，**缺的就是 special token 那一格**。
+
+好消息：value 是按**集合**比的（`set(vocab.values())`），
+所以 special token 放 256 还是放 499 都行，挑一个方案即可，别纠结。
+
+**第 2 步：填 `tests/adapters.py` 的 `run_train_bpe`**
+
+注意它要的返回值是 tuple `(vocab, merges)`，不是 `BPETokenizerParams`。
+
+**第 3 步：跑测试**
+
+```bash
+uv run pytest tests/test_train_bpe.py
+```
+
+预期：`test_train_bpe` ✅、`test_train_bpe_special_tokens` ✅、
+`test_train_bpe_speed` ❌（朴素版必挂，见下一步）
+
+**第 4 步：增量更新优化**
+
+`test_train_bpe_speed` 卡 1.5 秒，测试注释里明说「toy implementation 要 ~3 秒」。
+瓶颈是每轮都 `count_adjacent_pairs` 重扫全部 pre-token。
+
+核心思路：merge 之后**只有与被合并 pair 重叠的那些 pair 计数变了**。
+需要一个从「pair → 包含它的 pre-token」的反向索引，
+这样能直接跳到受影响的 pre-token，不用全表扫描。
+
+⚠️ **改之前先确认朴素版全绿** —— 有正确版本当参照，优化改错了立刻能对比出来。
+反过来做的话会同时调「逻辑对不对」和「优化对不对」两件事。
+
+⚠️ 另注意：**`multiprocessing.Pool` 的启动开销也算进这 1.5 秒**。
+macOS 默认 spawn，起 4 个进程要重新 import 模块。
+`corpus.en` 很小，并行可能反而是负收益 —— 按文件大小决定要不要开多进程。
+
+**第 5 步：TinyStories 10K**
+
+跑 10K 词表，vocab / merges 序列化落盘。
+回答 `train_bpe_tinystories`：耗时、内存、最长 token 是什么（合理吗）、profile 出瓶颈在哪。
+
+**第 6 步：后台启动 OWT 32K**
+
+做完上一步立刻挂上去（上限 12 小时），挂着去看 lecture。
+
+**验收：** 三个 test 全绿；TinyStories 词表落盘；OWT 在跑
 
 ### Day 3 · Tokenizer 类
 
@@ -148,7 +201,7 @@ s t, e st, o w, l ow, w est, n e, ne west, w i, wi d, wid est, low e, lowe r
 
 按优先级排，遇到再处理，别提前优化。
 
-1. **tie-break 在 `bytes` 上比较，不是在 token ID 上比。** 比错了会在几十次 merge 之后才暴露，症状极难定位。写 `max` 那行时留意。
+1. ~~**tie-break 在 `bytes` 上比较。**~~ ✅ 已解决，toy 上验证第一次 merge 取到了 `(b's', b't')`。
 
 2. **special token 的包含关系。** 正则 `|` 是从左到右先匹配先算。如果 `special_tokens` 里同时有 `<|endoftext|>` 和 `<|endoftext|><|endoftext|>`，短的排前面会让长的永远匹配不全。join 之前按长度降序排。`test_tokenizer.py` 里有专门的用例。
 

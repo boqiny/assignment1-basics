@@ -1,6 +1,4 @@
-from dataclasses import dataclass
-from abc import ABC
-from pretokenization import count_pretokenization
+from cs336_basics.pretokenization import count_pretokenization
 from collections import defaultdict
 
 def count_adjacent_pairs(pretokenization_bytes_dict: defaultdict(int)) -> dict[tuple[bytes, bytes], int]:
@@ -11,20 +9,22 @@ def count_adjacent_pairs(pretokenization_bytes_dict: defaultdict(int)) -> dict[t
             counts[(byte1, byte2)] += count
     return counts
 
-def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tuple(dict[int, bytes], list[tuple[bytes, bytes]]):
+def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     num_merges = vocab_size - len(special_tokens) - 256
-    print("num_merges: ", num_merges)
+    # print("num_merges: ", num_merges)
     pretokenization_counter = count_pretokenization(input_path, 4, special_tokens)
     pretokenization_bytes_dict = defaultdict(int)
     for k,v in pretokenization_counter.items():
         indices_list = list(k.encode("utf-8"))
         pretokenization_bytes_dict[tuple([bytes([i]) for i in indices_list])] += v
-    print("pretokenization_bytes_dict: ", pretokenization_bytes_dict)
+    # print("pretokenization_bytes_dict: ", pretokenization_bytes_dict)
     # pair_counts = count_adjacent_pairs(pretokenization_bytes_dict)
     # print(pair_counts)
 
     vocab: dict[int, bytes] = {x: bytes([x]) for x in range(256)}
     merges: list[tuple[bytes, bytes]] = []
+    for i in range(len(special_tokens)):
+        vocab[vocab_size - len(special_tokens) + i] = special_tokens[i].encode('utf-8')
 
     for i in range(num_merges):
         # Find the most common pair
@@ -38,7 +38,7 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str]) -> tu
         pretokenization_bytes_dict = merge(pretokenization_bytes_dict, most_common_pair[0], most_common_pair[1])
         # print("pretokenization_bytes_dict: ", pretokenization_bytes_dict)
     
-    print(merges)
+    print("len vocab:", len(vocab))
     return (vocab, merges)
 
 def merge(pretokenization_bytes_dict: defaultdict(int), byte1, byte2):
